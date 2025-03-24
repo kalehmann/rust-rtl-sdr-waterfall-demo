@@ -21,8 +21,29 @@ const PITCH: u32 = WIDTH * CHANNELS;
 struct WaterfallDemo {
     center_frequency: Arc<AtomicU32>,
     control_thread: Option<thread::JoinHandle<()>>,
+    sample_rate: Arc<AtomicU32>,
     should_stop: Arc<AtomicBool>,
     video_buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+fn start_reader_thread(
+    mut reader: rtlsdr_mt::Reader,
+    should_stop: Arc<AtomicBool>,
+    video_buffer: Arc<Mutex<Vec<u8>>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut planner: FftPlanner<f64> = FftPlanner::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+
+        while !should_stop.load(Ordering::Relaxed) {
+            reader
+                .read_async(1, 2048, |buf| {
+                    work_fft(buf, fft.clone(), video_buffer.clone());
+                    thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+                })
+                .unwrap();
+        }
+    })
 }
 
 fn render_text_centered<S, T>(
@@ -52,43 +73,63 @@ fn render_text_centered<S, T>(
     canvas.copy(&texture, None, rect).unwrap();
 }
 
+/// Shifts the buffer at d fields over the specified axis.
 fn shift<T>(buf: &mut [T], shape: Vec<u32>, axis: usize, d: i32)
 where
     T: Copy + std::default::Default,
 {
     let mut offset = d.abs() as usize;
+    let mut iterations = 1;
     for i in axis..shape.len() {
         offset *= shape[i] as usize;
     }
+    for i in 0..(axis - 1) {
+        iterations *= shape[i] as usize;
+    }
 
     let len = shape.iter().product::<u32>() as usize;
+    let chunk_size = len / iterations;
     let mut temp = vec![T::default(); offset];
 
-    if d < 0 {
-        temp.copy_from_slice(&buf[0..offset]);
-        buf.copy_within(offset..len, 0);
-        buf[len - offset..len].copy_from_slice(&temp);
-    } else {
-        temp.copy_from_slice(&buf[len - offset..len]);
-        buf.copy_within(0..(len - offset), offset);
-        buf[0..offset].copy_from_slice(&temp);
+    for i in 0..iterations {
+        let start = chunk_size * i;
+        let end = chunk_size * (i + 1);
+        if d < 0 {
+            temp.copy_from_slice(&buf[start..(start + offset)]);
+            buf.copy_within((start + offset)..end, start);
+            buf[end - offset..end].copy_from_slice(&temp);
+        } else {
+            temp.copy_from_slice(&buf[(end - offset)..end]);
+            buf.copy_within(start..(end - offset), start + offset);
+            buf[start..(start + offset)].copy_from_slice(&temp);
+        }
     }
 }
 
+/// Rolls the buffer at d fields over the specified axis and fills the remeining
+/// space with zeros.
 fn roll(buf: &mut [u8], shape: Vec<u32>, axis: usize, d: i32) {
     let mut offset = d.abs() as usize;
+    let mut iterations = 1;
     for i in axis..shape.len() {
         offset *= shape[i] as usize;
     }
+    for i in 0..(axis - 1) {
+        iterations *= shape[i] as usize;
+    }
 
     let len = shape.iter().product::<u32>() as usize;
-
-    if d < 0 {
-        buf.copy_within(offset..len, 0);
-        buf[(len - offset)..len].fill(0);
-    } else {
-        buf.copy_within(0..(len - offset), offset);
-        buf[0..offset].fill(0);
+    let chunk_size = len / iterations;
+    for i in 0..iterations {
+        let start = chunk_size * i;
+        let end = chunk_size * (i + 1);
+        if d < 0 {
+            buf.copy_within((start + offset)..end, start);
+            buf[(end - offset)..end].fill(0);
+        } else {
+            buf.copy_within(start..(end - offset), start + offset);
+            buf[start..(start + offset)].fill(0);
+        }
     }
 }
 
@@ -125,6 +166,7 @@ impl WaterfallDemo {
         WaterfallDemo {
             center_frequency: Arc::new(AtomicU32::new(100_000_000)),
             control_thread: None,
+            sample_rate: Arc::new(AtomicU32::new(2_400_000)),
             should_stop: Arc::new(AtomicBool::new(false)),
             video_buffer: Arc::new(Mutex::new(vec![0u8; BUF_SIZE])),
         }
@@ -141,30 +183,38 @@ impl WaterfallDemo {
 
     pub fn start_control_thread(&mut self) {
         let center_frequency = self.center_frequency.clone();
+        let sample_rate = self.sample_rate.clone();
         let should_stop = self.should_stop.clone();
         let video_buffer = self.video_buffer.clone();
+
         self.control_thread = Some(thread::spawn(move || {
-            let (mut ctl, mut reader) =
+            let (mut ctl, reader) =
                 rtlsdr_mt::open(0).expect("Could not open RTL-SDR device at index 0.");
-            ctl.set_sample_rate(2_400_000).unwrap();
+            ctl.set_sample_rate(sample_rate.load(Ordering::Relaxed))
+                .unwrap();
             ctl.set_center_freq(center_frequency.load(Ordering::Relaxed))
                 .unwrap();
 
-            let reader_thread = thread::spawn(move || {
-                let mut planner: FftPlanner<f64> = FftPlanner::new();
-                let fft = planner.plan_fft_forward(FFT_SIZE);
-                reader
-                    .read_async(1, 2048, |buf| {
-                        work_fft(buf, fft.clone(), video_buffer.clone());
-                        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
-                    })
-                    .unwrap();
-            });
+            let reader_thread =
+                start_reader_thread(reader, should_stop.clone(), video_buffer.clone());
 
             while !should_stop.load(Ordering::Relaxed) {
-                let cf = center_frequency.load(Ordering::Relaxed);
-                if cf != ctl.center_freq() {
-                    ctl.set_center_freq(cf);
+                let desired_freq = center_frequency.load(Ordering::Relaxed);
+                let current_freq = ctl.center_freq();
+
+                if current_freq != desired_freq {
+                    let diff = current_freq as i32 - desired_freq as i32;
+                    let sr = sample_rate.load(Ordering::Relaxed) as i32;
+                    ctl.cancel_async_read();
+                    ctl.set_center_freq(desired_freq).unwrap();
+                    let vb = video_buffer.clone();
+                    let mut raw_data = vb.lock().unwrap();
+                    roll(
+                        &mut raw_data,
+                        vec![HEIGHT, WIDTH, CHANNELS],
+                        2,
+                        diff.signum() * FFT_SIZE as i32 * diff.abs() / sr,
+                    );
                 }
                 thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
             }
@@ -220,10 +270,12 @@ impl WaterfallDemo {
                     Event::KeyDown {
                         keycode: Some(Keycode::Right),
                         ..
-                    } => self.center_frequency.store(
-                        self.center_frequency.load(Ordering::Relaxed) + 100_000,
-                        Ordering::Relaxed,
-                    ),
+                    } => {
+                        self.center_frequency.store(
+                            self.center_frequency.load(Ordering::Relaxed) + 100_000,
+                            Ordering::Relaxed,
+                        );
+                    }
                     _ => {}
                 }
             }
