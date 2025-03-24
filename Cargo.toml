@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rtlsdr_mt = "2.2.0"
+rustfft = "6.2.0"
 sdl2 = "0.37.0"
