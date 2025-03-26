@@ -133,7 +133,11 @@ fn roll(buf: &mut [u8], shape: Vec<u32>, axis: usize, d: i32) {
     }
 }
 
-fn work_fft(buf: &[u8], fft: Arc<dyn Fft<f64>>, video_buffer: Arc<Mutex<Vec<u8>>>) {
+fn work_fft(
+    buf: &[u8],
+    fft: Arc<dyn Fft<f64>>,
+    video_buffer: Arc<Mutex<Vec<u8>>>,
+) {
     let mut raw_data = video_buffer.lock().unwrap();
 
     roll(&mut raw_data, vec![HEIGHT, WIDTH, CHANNELS], 1, -1);
@@ -141,23 +145,33 @@ fn work_fft(buf: &[u8], fft: Arc<dyn Fft<f64>>, video_buffer: Arc<Mutex<Vec<u8>>
     let mut samples: [Complex<f64>; FFT_SIZE] = buf
         .chunks(2)
         .map(|pair| Complex {
-            re: f64::from(pair[0]),
-            im: f64::from(pair[1]),
+            re: (f64::from(pair[0]) - 127.0) / 127.0,
+            im: (f64::from(pair[1]) - 127.0) / 127.0,
         })
         .collect::<Vec<Complex<f64>>>()
         .try_into()
         .unwrap();
     fft.process(&mut samples);
 
-    let mut magnitudes = samples.map(|c| c.norm());
-    shift(&mut magnitudes, vec![WIDTH], 1, (WIDTH / 2) as i32);
+    let mut log_magnitudes = samples.map(|c| {
+        // Clip values between 0 dBFS (=1) and -120 dBFS (=10^-12)
+        10.0 * (c.norm_sqr() / (FFT_SIZE as f64).powi(2))
+            .max(1e-12)
+            .log10()
+            .min(0.)
+    });
+    shift(
+        &mut log_magnitudes,
+        vec![FFT_SIZE as u32],
+        1,
+        (FFT_SIZE / 2) as i32,
+    );
     let mut index = (WIDTH * (HEIGHT - 1) * CHANNELS) as usize;
-    for i in 0usize..FFT_SIZE {
-        let logmag = (10.0 * magnitudes[i].powi(2).log10()) as i32;
-        for _ in 0..CHANNELS {
-            raw_data[index] = (100 + logmag) as u8;
-            index += 1;
-        }
+    for i in 0..FFT_SIZE {
+        // Map -120 to 0 dBFS to a value between 0 and 255
+        let val = (2.12 * (100.0 + log_magnitudes[i])) as u8;
+        raw_data[index..index + 3].copy_from_slice(&[val, val, val]);
+        index += 3;
     }
 }
 
