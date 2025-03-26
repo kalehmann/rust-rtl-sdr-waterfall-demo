@@ -21,6 +21,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
+use sdl2::render::BlendMode;
 use sdl2::rwops::RWops;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -31,7 +32,9 @@ use std::time::Duration;
 const ANDIKA_BOLD_TTF: &[u8] =
     include_bytes!("../assets/Andika/Andika-Bold.ttf");
 const WIDTH: u32 = 1024;
-const HEIGHT: u32 = 700;
+const HEIGHT: u32 = 800;
+const SPECTRUM_OFFSET: u32 = 30;
+const WATERFALL_OFFSET: u32 = 300;
 const CHANNELS: u32 = 3;
 const BUF_SIZE: usize = (WIDTH * HEIGHT * CHANNELS) as usize;
 const FFT_SIZE: usize = WIDTH as usize;
@@ -158,8 +161,15 @@ fn work_fft(
     video_buffer: Arc<Mutex<Vec<u8>>>,
 ) {
     let mut raw_data = video_buffer.lock().unwrap();
+    let mut index = (WATERFALL_OFFSET * CHANNELS * WIDTH) as usize;
 
-    roll(&mut raw_data, vec![HEIGHT, WIDTH, CHANNELS], 1, -1);
+    roll(
+        &mut raw_data[index..BUF_SIZE],
+        vec![HEIGHT - WATERFALL_OFFSET, WIDTH, CHANNELS],
+        1,
+        1,
+    );
+    raw_data[0..index].fill(0);
 
     let mut samples: [Complex<f64>; FFT_SIZE] = buf
         .chunks(2)
@@ -185,12 +195,33 @@ fn work_fft(
         1,
         (FFT_SIZE / 2) as i32,
     );
-    let mut index = (WIDTH * (HEIGHT - 1) * CHANNELS) as usize;
+
+    // Draw the horizontal lines for the amplitude spectrum
+    for i in (4..24).step_by(4) {
+        let start = ((SPECTRUM_OFFSET + i * 10) * CHANNELS * WIDTH) as usize;
+        let end = start + (CHANNELS * WIDTH) as usize;
+        raw_data[start..end].fill(55);
+    }
+
     for i in 0..FFT_SIZE {
         // Map -120 to 0 dBFS to a value between 0 and 255
         let val = (2.12 * (100.0 + log_magnitudes[i])) as u8;
         raw_data[index..index + 3].copy_from_slice(&[val, val, val]);
         index += 3;
+
+        // Draw the amplitude spectrum.
+        if i % 4 == 0 {
+            let average_amplitude =
+                log_magnitudes[i..i + 4].into_iter().sum::<f64>() / 4.0 * -2.0;
+            let mut offset = (((SPECTRUM_OFFSET + average_amplitude as u32)
+                * WIDTH
+                + i as u32)
+                * CHANNELS) as usize;
+            for _ in 0..4 {
+                raw_data[offset..offset + 3].copy_from_slice(&[210, 0, 120]);
+                offset += 3;
+            }
+        }
     }
 }
 
@@ -265,16 +296,25 @@ impl WaterfallDemo {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
         let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context
+	// Font medium (16pt)
+        let mut font_md = ttf_context
             .load_font_from_rwops(
                 RWops::from_bytes(ANDIKA_BOLD_TTF).unwrap(),
-                32,
+                16,
             )
             .unwrap();
-        font.set_style(sdl2::ttf::FontStyle::BOLD);
+        font_md.set_style(sdl2::ttf::FontStyle::BOLD);
+	// Font small (12pt)
+        let mut font_sm = ttf_context
+            .load_font_from_rwops(
+                RWops::from_bytes(ANDIKA_BOLD_TTF).unwrap(),
+                12,
+            )
+            .unwrap();
+        font_sm.set_style(sdl2::ttf::FontStyle::BOLD);
 
         let window = video_subsystem
-            .window("Rust RTL-SDR waterfall demo", WIDTH, HEIGHT + 100)
+            .window("Rust RTL-SDR waterfall demo", WIDTH, HEIGHT)
             .position_centered()
             .build()
             .unwrap();
@@ -284,6 +324,7 @@ impl WaterfallDemo {
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
         canvas.present();
+        canvas.set_blend_mode(BlendMode::Blend);
         let mut event_pump = sdl_context.event_pump().unwrap();
 
         'running: loop {
@@ -335,17 +376,33 @@ impl WaterfallDemo {
                     .create_texture_from_surface(&surface)
                     .unwrap();
                 let r = Rect::new(0, 0, WIDTH, HEIGHT);
-                canvas.copy(&texture, r, r).unwrap();
+                canvas.copy(&texture, None, r).unwrap();
             }
+	    
+            canvas.set_draw_color(Color::RGB(40, 5, 55));
+            canvas.fill_rect(Rect::new(0, 0, WIDTH, 30)).unwrap();
+            canvas.fill_rect(Rect::new(0, 270, WIDTH, 30)).unwrap();
+            canvas.set_draw_color(Color::RGBA(45, 225, 230, 50));
+            canvas.fill_rect(Rect::new(0, 30, 70, 240)).unwrap();
             let freq_mhz = (current_freq as f64) / 1_000_000f64;
             render_text_centered(
                 &format!("{freq_mhz:.3} MHz").to_string(),
                 (WIDTH / 2) as i32,
-                750,
-                &font,
+                285,
+                &font_md,
                 &mut canvas,
                 &texture_creator,
             );
+            for i in (20..101).step_by(20) {
+                render_text_centered(
+                    &format!("-{i} dBFS").to_string(),
+                    35,
+                    SPECTRUM_OFFSET as i32 + 2 * i,
+                    &font_sm,
+                    &mut canvas,
+                    &texture_creator,
+                );
+            }
 
             canvas.present();
             thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
