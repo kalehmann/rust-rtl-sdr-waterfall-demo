@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const ANDIKA_BOLD_TTF: &[u8] = include_bytes!("../assets/Andika/Andika-Bold.ttf");
+const ANDIKA_BOLD_TTF: &[u8] =
+    include_bytes!("../assets/Andika/Andika-Bold.ttf");
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 700;
 const CHANNELS: u32 = 3;
@@ -202,15 +203,20 @@ impl WaterfallDemo {
         let video_buffer = self.video_buffer.clone();
 
         self.control_thread = Some(thread::spawn(move || {
-            let (mut ctl, reader) =
-                rtlsdr_mt::open(0).expect("Could not open RTL-SDR device at index 0.");
+            let (mut ctl, reader) = rtlsdr_mt::open(0)
+                .expect("Could not open RTL-SDR device at index 0.");
             ctl.set_sample_rate(sample_rate.load(Ordering::Relaxed))
                 .unwrap();
             ctl.set_center_freq(center_frequency.load(Ordering::Relaxed))
                 .unwrap();
+            ctl.disable_agc().unwrap();
+            ctl.set_tuner_gain(496).unwrap();
 
-            let reader_thread =
-                start_reader_thread(reader, should_stop.clone(), video_buffer.clone());
+            let reader_thread = start_reader_thread(
+                reader,
+                should_stop.clone(),
+                video_buffer.clone(),
+            );
 
             while !should_stop.load(Ordering::Relaxed) {
                 let desired_freq = center_frequency.load(Ordering::Relaxed);
@@ -242,7 +248,10 @@ impl WaterfallDemo {
         let video_subsystem = sdl_context.video().unwrap();
         let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string()).unwrap();
         let mut font = ttf_context
-            .load_font_from_rwops(RWops::from_bytes(ANDIKA_BOLD_TTF).unwrap(), 32)
+            .load_font_from_rwops(
+                RWops::from_bytes(ANDIKA_BOLD_TTF).unwrap(),
+                32,
+            )
             .unwrap();
         font.set_style(sdl2::ttf::FontStyle::BOLD);
 
@@ -262,6 +271,8 @@ impl WaterfallDemo {
         'running: loop {
             canvas.set_draw_color(Color::RGB(0, 0, 0));
             canvas.clear();
+            let mut current_freq =
+                self.center_frequency.load(Ordering::Relaxed);
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
@@ -276,19 +287,17 @@ impl WaterfallDemo {
                         keycode: Some(Keycode::Left),
                         ..
                     } => {
-                        self.center_frequency.store(
-                            self.center_frequency.load(Ordering::Relaxed) - 100_000,
-                            Ordering::Relaxed,
-                        );
+                        current_freq -= 100_000;
+                        self.center_frequency
+                            .store(current_freq, Ordering::Relaxed);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Right),
                         ..
                     } => {
-                        self.center_frequency.store(
-                            self.center_frequency.load(Ordering::Relaxed) + 100_000,
-                            Ordering::Relaxed,
-                        );
+                        current_freq += 100_000;
+                        self.center_frequency
+                            .store(current_freq, Ordering::Relaxed);
                     }
                     _ => {}
                 }
@@ -310,7 +319,7 @@ impl WaterfallDemo {
                 let r = Rect::new(0, 0, WIDTH, HEIGHT);
                 canvas.copy(&texture, r, r).unwrap();
             }
-            let freq_mhz = (self.center_frequency.load(Ordering::Relaxed) as f64) / 1_000_000f64;
+            let freq_mhz = (current_freq as f64) / 1_000_000f64;
             render_text_centered(
                 &format!("{freq_mhz:.3} MHz").to_string(),
                 (WIDTH / 2) as i32,
