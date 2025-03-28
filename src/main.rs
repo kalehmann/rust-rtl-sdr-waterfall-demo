@@ -25,6 +25,8 @@ mod ui;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct CliArgs {
+    #[arg(short, long, default_value_t = 100.000)]
+    center_frequency_mhz: f64,
     #[arg(short, long, value_enum, default_value_t=dsp::WindowType::Rectangular)]
     fft_window: dsp::WindowType,
 }
@@ -32,5 +34,9 @@ struct CliArgs {
 fn main() {
     let args = CliArgs::parse();
 
-    demo::WaterfallDemo::new(args.fft_window).run();
+    demo::WaterfallDemo::new(
+        (args.center_frequency_mhz * 1_000_000.) as u32,
+        args.fft_window,
+    )
+    .run();
 }

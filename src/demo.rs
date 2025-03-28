@@ -34,8 +34,11 @@ pub struct WaterfallDemo {
 }
 
 impl WaterfallDemo {
-    pub fn new(fft_window: dsp::WindowType) -> WaterfallDemo {
-        let center_frequency = Arc::new(AtomicU32::new(100_000_000));
+    pub fn new(
+        center_frequency_hz: u32,
+        fft_window: dsp::WindowType,
+    ) -> WaterfallDemo {
+        let center_frequency = Arc::new(AtomicU32::new(center_frequency_hz));
         let sample_rate: u32 = 2_400_000;
 
         WaterfallDemo {
