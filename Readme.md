@@ -3,6 +3,8 @@
 Just a little demo rendering a spectrogram of a signal captured by an RTL-SDR in
 Rust using SDL2.
 
+[![A screenshot of the application][screenshot]][screenshot]
+
 ### Goals
 
 * Basic interfacing with the RTL-SDR
@@ -30,3 +32,4 @@ The colors are loosely inspired by [this reddit post][color_palette].
   [andika]: https://software.sil.org/andika/
   [color_palette]: https://old.reddit.com/r/outrun/comments/zf7dfo/synthwave_color_palette_this_work_of_art_is_not/
   [fft_normalization]: ./docs/fft_normalization.md
+  [screenshot]: ./docs/screenshot.avif
