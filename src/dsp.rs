@@ -117,7 +117,7 @@ impl SignalProcessor {
             log_magnitudes: vec![0.0f64; FFT_SIZE],
             peak: None,
         };
-        let mut peak: (usize, f64) = (0, 0.);
+        let mut peak: (usize, f64) = (0, -120.0);
 
         for (i, c) in signal.into_iter().enumerate() {
             let index = (i + FFT_SIZE / 2) % FFT_SIZE;
@@ -129,7 +129,7 @@ impl SignalProcessor {
             result.log_magnitudes[index] = logmag;
             result.avg += logmag;
             if logmag > peak.1 {
-                peak = (i, logmag);
+                peak = (index, logmag);
             }
         }
         result.avg /= FFT_SIZE as f64;

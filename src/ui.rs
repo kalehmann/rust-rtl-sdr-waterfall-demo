@@ -28,7 +28,7 @@ use crate::dsp::FftResult;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
-use sdl2::rect::Rect;
+use sdl2::rect::{Point, Rect};
 use sdl2::render::{BlendMode, Canvas, TextureQuery};
 use sdl2::rwops::RWops;
 use sdl2::ttf::{Font, FontStyle, Sdl2TtfContext};
@@ -93,6 +93,8 @@ impl Ui {
         let font_md = create_font(16, &ttf_context);
         // Font small (12pt)
         let font_sm = create_font(12, &ttf_context);
+	let mut avg: f64 = 0.;
+	let mut peak: Option<(usize, f64)> = None;
 
         self.canvas.set_blend_mode(BlendMode::Blend);
         'running: loop {
@@ -146,61 +148,18 @@ impl Ui {
                             );
                             current_frequency = result.center_frequency;
                         }
+			avg = result.avg;
+			peak = result.peak;
                         self.update_video_buffer(result);
                     }
                     Err(..) => {}
                 },
                 None => {}
             }
-            self.render(&font_md, &font_sm, current_frequency);
+            self.render(&font_md, &font_sm, current_frequency, avg, peak);
 
             self.canvas.present();
             thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
-        }
-    }
-
-    pub fn update_video_buffer(&self, fft_result: FftResult) {
-        let mut raw_data = self.video_buffer.lock().unwrap();
-        let mut index = (WATERFALL_OFFSET * CHANNELS * WIDTH) as usize;
-        roll(
-            &mut raw_data[index..BUF_SIZE],
-            vec![HEIGHT - WATERFALL_OFFSET, WIDTH, CHANNELS],
-            1,
-            1,
-        );
-        raw_data[0..index].fill(0);
-
-        // Draw the horizontal lines for the amplitude spectrum
-        for i in (4..24).step_by(4) {
-            let start =
-                ((SPECTRUM_OFFSET + i * 10) * CHANNELS * WIDTH) as usize;
-            let end = start + (CHANNELS * WIDTH) as usize;
-            raw_data[start..end].fill(55);
-        }
-
-        for i in 0..WIDTH as usize {
-            // Map -120 to 0 dBFS to a value between 0 and 255
-            let l = (-1. * fft_result.log_magnitudes[i]) as usize;
-            raw_data[index..index + 3].copy_from_slice(&self.color_map[l]);
-            index += 3;
-
-            // Draw the amplitude spectrum.
-            if i % 4 == 0 {
-                let average_amplitude = fft_result.log_magnitudes[i..i + 4]
-                    .into_iter()
-                    .sum::<f64>()
-                    / 4.0
-                    * -2.0;
-                let mut offset =
-                    (((SPECTRUM_OFFSET + average_amplitude as u32) * WIDTH
-                        + i as u32)
-                        * CHANNELS) as usize;
-                for _ in 0..4 {
-                    raw_data[offset..offset + 3]
-                        .copy_from_slice(&[210, 0, 120]);
-                    offset += 3;
-                }
-            }
         }
     }
 
@@ -209,6 +168,8 @@ impl Ui {
         font_md: &Font,
         font_sm: &Font,
         current_frequency: u32,
+	avg: f64,
+	peak: Option<(usize, f64)>,
     ) {
         self.render_video_buffer();
         self.canvas.set_draw_color(Color::RGB(40, 5, 55));
@@ -224,6 +185,36 @@ impl Ui {
             285,
             &font_md,
         );
+        self.render_text_centered(
+            &format!("Avg: {avg:.1} dBFS").to_string(),
+            950,
+            SPECTRUM_OFFSET as i32 - 2 * avg as i32,
+            &font_sm,
+        );
+        self.canvas.set_draw_color(Color::RGB(255, 110, 20));
+	match peak {
+	    Some((x, logmag)) => {
+		let half_width = WIDTH as f64 * 0.5;
+		let label_x = half_width + (x as f64 - half_width) * 0.8;
+		self.canvas.draw_line(
+		    Point::new(
+			label_x as i32,
+			30,
+		    ),
+		    Point::new(
+			x as i32,
+			SPECTRUM_OFFSET as i32 + (logmag * -2.0) as i32,
+		    ),
+		).unwrap();
+		self.render_text_centered(
+		    &format!("Peak: {logmag:.1} dBFS").to_string(),
+		    label_x as i32,
+		    15,
+		    &font_sm,
+		);
+	    },
+	    None => {},
+	}
         for i in (20..101).step_by(20) {
             self.render_text_centered(
                 &format!("-{i} dBFS").to_string(),
@@ -276,6 +267,51 @@ impl Ui {
         let r = Rect::new(0, 0, WIDTH, HEIGHT);
         self.canvas.copy(&texture, None, r).unwrap();
     }
+
+    fn update_video_buffer(&self, fft_result: FftResult) {
+        let mut raw_data = self.video_buffer.lock().unwrap();
+        let mut index = (WATERFALL_OFFSET * CHANNELS * WIDTH) as usize;
+        roll(
+            &mut raw_data[index..BUF_SIZE],
+            vec![HEIGHT - WATERFALL_OFFSET, WIDTH, CHANNELS],
+            1,
+            1,
+        );
+        raw_data[0..index].fill(0);
+
+        // Draw the horizontal lines for the amplitude spectrum
+        for i in (4..24).step_by(4) {
+            let start =
+                ((SPECTRUM_OFFSET + i * 10) * CHANNELS * WIDTH) as usize;
+            let end = start + (CHANNELS * WIDTH) as usize;
+            raw_data[start..end].fill(55);
+        }
+
+        for i in 0..WIDTH as usize {
+            // Map -120 to 0 dBFS to a value between 0 and 255
+            let l = (-1. * fft_result.log_magnitudes[i]) as usize;
+            raw_data[index..index + 3].copy_from_slice(&self.color_map[l]);
+            index += 3;
+
+            // Draw the amplitude spectrum.
+            if i % 4 == 0 {
+                let average_amplitude = fft_result.log_magnitudes[i..i + 4]
+                    .into_iter()
+                    .sum::<f64>()
+                    / 4.0
+                    * -2.0;
+                let mut offset =
+                    (((SPECTRUM_OFFSET + average_amplitude as u32) * WIDTH
+                        + i as u32)
+                        * CHANNELS) as usize;
+                for _ in 0..4 {
+                    raw_data[offset..offset + 3]
+                        .copy_from_slice(&[210, 0, 120]);
+                    offset += 3;
+                }
+            }
+        }
+    }
 }
 
 fn create_font<'a>(
@@ -304,7 +340,7 @@ fn interpolate_color_map(
     for i in 0..map_size {
         let start = colors[(i as f64 / s).floor() as usize];
         let end = colors[(i as f64 / s).ceil() as usize];
-	// Offset from the start to the end color from 0 to 1
+        // Offset from the start to the end color from 0 to 1
         let o = (i as f64 % s) / s;
         result[i] = [
             (start[0] as f64 + (end[0] as f64 - start[0] as f64) * o) as u8,
