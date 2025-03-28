@@ -37,16 +37,17 @@ pub fn start_reader_thread(
 
         while !should_stop.load(Ordering::Relaxed) {
             let cf = center_frequency.load(Ordering::Relaxed);
-            reader
-                .read_async(1, 2048, |buf| {
-                    let mut result = signal_processor.process_signal(buf);
-                    result.center_frequency = cf;
-                    match sender.try_send(result) {
-                        Ok(..) => {}
-                        Err(..) => {}
-                    }
-                })
-                .unwrap();
+            match reader.read_async(1, 2048, |buf| {
+                let mut result = signal_processor.process_signal(buf);
+                result.center_frequency = cf;
+                match sender.try_send(result) {
+                    Ok(..) => {}
+                    Err(..) => {}
+                }
+            }) {
+                Ok(..) => {}
+                Err(..) => {}
+            }
         }
     })
 }
