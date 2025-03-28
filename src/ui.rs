@@ -33,7 +33,7 @@ use sdl2::render::{BlendMode, Canvas, TextureQuery};
 use sdl2::rwops::RWops;
 use sdl2::ttf::{Font, FontStyle, Sdl2TtfContext};
 use std::ops::DerefMut;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -48,13 +48,19 @@ pub struct Ui {
     color_map: Vec<[u8; 3]>,
     event_pump: sdl2::EventPump,
     fft_recv: Option<Receiver<FftResult>>,
+    gain: Arc<AtomicI32>,
+    gains: Option<Vec<i32>>,
     sample_rate: u32,
     texture_creator: sdl2::render::TextureCreator<sdl2::video::WindowContext>,
     pub video_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Ui {
-    pub fn new(center_frequency: Arc<AtomicU32>, sample_rate: u32) -> Ui {
+    pub fn new(
+        center_frequency: Arc<AtomicU32>,
+        gain: Arc<AtomicI32>,
+        sample_rate: u32,
+    ) -> Ui {
         let sdl_context = sdl2::init().unwrap();
         let event_pump = sdl_context.event_pump().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
@@ -75,10 +81,24 @@ impl Ui {
             ),
             event_pump: event_pump,
             fft_recv: None,
+            gain: gain,
+            gains: None,
             sample_rate: sample_rate,
             texture_creator: texture_creator,
             video_buffer: Arc::new(Mutex::new(vec![0u8; BUF_SIZE])),
         }
+    }
+
+    pub fn set_available_gains(&mut self, gains: Vec<i32>) {
+        let mut g = gains.clone();
+        // There may be some zeros at the end.
+        for (i, gain) in gains.into_iter().enumerate() {
+            if gain == 0 && i > 0 {
+                g.truncate(i);
+                break;
+            }
+        }
+        self.gains = Some(g);
     }
 
     pub fn set_fft_receiver(&mut self, receiver: Receiver<FftResult>) {
@@ -93,8 +113,8 @@ impl Ui {
         let font_md = create_font(16, &ttf_context);
         // Font small (12pt)
         let font_sm = create_font(12, &ttf_context);
-	let mut avg: f64 = 0.;
-	let mut peak: Option<(usize, f64)> = None;
+        let mut avg: f64 = 0.;
+        let mut peak: Option<(usize, f64)> = None;
 
         self.canvas.set_blend_mode(BlendMode::Blend);
         'running: loop {
@@ -107,6 +127,14 @@ impl Ui {
                     } => {
                         break 'running;
                     }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Down),
+                        ..
+                    } => on_key_down(self.gain.clone(), &self.gains),
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Up),
+                        ..
+                    } => on_key_up(self.gain.clone(), &self.gains),
                     Event::KeyDown {
                         keycode: Some(Keycode::Left),
                         ..
@@ -148,8 +176,8 @@ impl Ui {
                             );
                             current_frequency = result.center_frequency;
                         }
-			avg = result.avg;
-			peak = result.peak;
+                        avg = result.avg;
+                        peak = result.peak;
                         self.update_video_buffer(result);
                     }
                     Err(..) => {}
@@ -168,8 +196,8 @@ impl Ui {
         font_md: &Font,
         font_sm: &Font,
         current_frequency: u32,
-	avg: f64,
-	peak: Option<(usize, f64)>,
+        avg: f64,
+        peak: Option<(usize, f64)>,
     ) {
         self.render_video_buffer();
         self.canvas.set_draw_color(Color::RGB(40, 5, 55));
@@ -185,6 +213,13 @@ impl Ui {
             285,
             &font_md,
         );
+        let gain = self.gain.load(Ordering::Relaxed) as f64 / 10.0;
+        self.render_text_centered(
+            &format!("Gain: {gain:.1} dB").to_string(),
+            40,
+            15,
+            &font_sm,
+        );
         self.render_text_centered(
             &format!("Avg: {avg:.1} dBFS").to_string(),
             950,
@@ -192,29 +227,28 @@ impl Ui {
             &font_sm,
         );
         self.canvas.set_draw_color(Color::RGB(255, 110, 20));
-	match peak {
-	    Some((x, logmag)) => {
-		let half_width = WIDTH as f64 * 0.5;
-		let label_x = half_width + (x as f64 - half_width) * 0.8;
-		self.canvas.draw_line(
-		    Point::new(
-			label_x as i32,
-			30,
-		    ),
-		    Point::new(
-			x as i32,
-			SPECTRUM_OFFSET as i32 + (logmag * -2.0) as i32,
-		    ),
-		).unwrap();
-		self.render_text_centered(
-		    &format!("Peak: {logmag:.1} dBFS").to_string(),
-		    label_x as i32,
-		    15,
-		    &font_sm,
-		);
-	    },
-	    None => {},
-	}
+        match peak {
+            Some((x, logmag)) => {
+                let half_width = WIDTH as f64 * 0.5;
+                let label_x = half_width + (x as f64 - half_width) * 0.8;
+                self.canvas
+                    .draw_line(
+                        Point::new(label_x as i32, 30),
+                        Point::new(
+                            x as i32,
+                            SPECTRUM_OFFSET as i32 + (logmag * -2.0) as i32,
+                        ),
+                    )
+                    .unwrap();
+                self.render_text_centered(
+                    &format!("Peak: {logmag:.1} dBFS").to_string(),
+                    label_x as i32,
+                    15,
+                    &font_sm,
+                );
+            }
+            None => {}
+        }
         for i in (20..101).step_by(20) {
             self.render_text_centered(
                 &format!("-{i} dBFS").to_string(),
@@ -350,6 +384,46 @@ fn interpolate_color_map(
     }
 
     return result;
+}
+
+fn on_key_down(gain: Arc<AtomicI32>, gains: &Option<Vec<i32>>) {
+    let current_gain = gain.load(Ordering::Relaxed);
+    match gains {
+        Some(g) => {
+            let index = g.into_iter().position(|x| *x == current_gain);
+            match index {
+                Some(i) => {
+                    if i > 0 {
+                        gain.store(g[(i - 1) as usize], Ordering::Relaxed);
+                    }
+                }
+                None => {
+                    gain.store(0, Ordering::Relaxed);
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+fn on_key_up(gain: Arc<AtomicI32>, gains: &Option<Vec<i32>>) {
+    let current_gain = gain.load(Ordering::Relaxed);
+    match gains {
+        Some(g) => {
+            let index = g.into_iter().position(|x| *x == current_gain);
+            match index {
+                Some(i) => {
+                    if i < g.len() - 1 {
+                        gain.store(g[(i + 1) as usize], Ordering::Relaxed);
+                    }
+                }
+                None => {
+                    gain.store(0, Ordering::Relaxed);
+                }
+            }
+        }
+        None => {}
+    }
 }
 
 /// Rolls the buffer at d fields over the specified axis and fills the remaining
