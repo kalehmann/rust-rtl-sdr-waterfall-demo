@@ -18,14 +18,9 @@
 
 use crate::dsp;
 use crate::ui;
-use crate::{BUF_SIZE, CHANNELS, FFT_SIZE, HEIGHT, WIDTH};
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
-use sdl2::render::BlendMode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -34,17 +29,20 @@ pub struct WaterfallDemo {
     control_thread: Option<thread::JoinHandle<()>>,
     sample_rate: Arc<AtomicU32>,
     should_stop: Arc<AtomicBool>,
-    video_buffer: Arc<Mutex<Vec<u8>>>,
+    ui: ui::Ui,
 }
 
 impl WaterfallDemo {
     pub fn new() -> WaterfallDemo {
+        let center_frequency = Arc::new(AtomicU32::new(100_000_000));
+        let sample_rate: u32 = 2_400_000;
+
         WaterfallDemo {
-            center_frequency: Arc::new(AtomicU32::new(100_000_000)),
+            center_frequency: center_frequency.clone(),
             control_thread: None,
-            sample_rate: Arc::new(AtomicU32::new(2_400_000)),
+            sample_rate: Arc::new(AtomicU32::new(sample_rate)),
             should_stop: Arc::new(AtomicBool::new(false)),
-            video_buffer: Arc::new(Mutex::new(vec![0u8; BUF_SIZE])),
+            ui: ui::Ui::new(center_frequency.clone(), sample_rate),
         }
     }
 
@@ -67,7 +65,8 @@ impl WaterfallDemo {
         let center_frequency = self.center_frequency.clone();
         let sample_rate = self.sample_rate.clone();
         let should_stop = self.should_stop.clone();
-        let video_buffer = self.video_buffer.clone();
+        let (sync_sender, receiver) = sync_channel::<dsp::FftResult>(0);
+        self.ui.set_fft_receiver(receiver);
 
         self.control_thread = Some(thread::spawn(move || {
             let (mut ctl, reader) = rtlsdr_mt::open(0)
@@ -77,40 +76,22 @@ impl WaterfallDemo {
             ctl.set_center_freq(center_frequency.load(Ordering::Relaxed))
                 .unwrap();
             ctl.disable_agc().unwrap();
-            ctl.set_tuner_gain(496).unwrap();
-
-            let (sync_sender, receiver) = sync_channel::<dsp::FftResult>(0);
+            ctl.set_tuner_gain(296).unwrap();
 
             let reader_thread = dsp::start_reader_thread(
                 reader,
+                center_frequency.clone(),
                 should_stop.clone(),
                 sync_sender,
             );
 
             while !should_stop.load(Ordering::Relaxed) {
-                match receiver.recv() {
-                    Ok(result) => {
-                        ui::update_video_buffer(video_buffer.clone(), result);
-                    }
-                    Err(..) => {}
-                }
-
                 let desired_freq = center_frequency.load(Ordering::Relaxed);
                 let current_freq = ctl.center_freq();
 
                 if current_freq != desired_freq {
-                    let diff = current_freq as i32 - desired_freq as i32;
-                    let sr = sample_rate.load(Ordering::Relaxed) as i32;
                     ctl.cancel_async_read();
                     ctl.set_center_freq(desired_freq).unwrap();
-                    let vb = video_buffer.clone();
-                    let mut raw_data = vb.lock().unwrap();
-                    ui::roll(
-                        &mut raw_data,
-                        vec![HEIGHT, WIDTH, CHANNELS],
-                        2,
-                        diff.signum() * FFT_SIZE as i32 * diff.abs() / sr,
-                    );
                 }
                 thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
             }
@@ -119,73 +100,8 @@ impl WaterfallDemo {
         }));
     }
 
-    fn start_sdl2_window(&self) {
-        let sdl_context = sdl2::init().unwrap();
-        let video_subsystem = sdl_context.video().unwrap();
-        let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string()).unwrap();
-        // Font medium (16pt)
-        let font_md = ui::create_font(16, &ttf_context);
-        // Font small (12pt)
-        let font_sm = ui::create_font(12, &ttf_context);
-
-        let window = video_subsystem
-            .window("Rust RTL-SDR waterfall demo", WIDTH, HEIGHT)
-            .position_centered()
-            .build()
-            .unwrap();
-        let mut canvas = window.into_canvas().build().unwrap();
-        let texture_creator = canvas.texture_creator();
-
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.clear();
-        canvas.present();
-        canvas.set_blend_mode(BlendMode::Blend);
-        let mut event_pump = sdl_context.event_pump().unwrap();
-
-        'running: loop {
-            let mut current_freq =
-                self.center_frequency.load(Ordering::Relaxed);
-            for event in event_pump.poll_iter() {
-                match event {
-                    Event::Quit { .. }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    } => {
-                        self.should_stop.store(true, Ordering::Relaxed);
-                        break 'running;
-                    }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Left),
-                        ..
-                    } => {
-                        current_freq -= 100_000;
-                        self.center_frequency
-                            .store(current_freq, Ordering::Relaxed);
-                    }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Right),
-                        ..
-                    } => {
-                        current_freq += 100_000;
-                        self.center_frequency
-                            .store(current_freq, Ordering::Relaxed);
-                    }
-                    _ => {}
-                }
-            }
-
-            ui::render(
-                &mut canvas,
-                &texture_creator,
-                &font_sm,
-                &font_md,
-                (current_freq as f64) / 1_000_000f64,
-                self.video_buffer.clone(),
-            );
-
-            canvas.present();
-            thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
-        }
+    fn start_sdl2_window(&mut self) {
+        self.ui.run();
+        self.should_stop.store(true, Ordering::Relaxed);
     }
 }

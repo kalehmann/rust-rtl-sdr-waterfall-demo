@@ -20,13 +20,6 @@ mod demo;
 mod dsp;
 mod ui;
 
-const WIDTH: u32 = 1024;
-const HEIGHT: u32 = 800;
-const CHANNELS: u32 = 3;
-const BUF_SIZE: usize = (WIDTH * HEIGHT * CHANNELS) as usize;
-const FFT_SIZE: usize = WIDTH as usize;
-const PITCH: u32 = WIDTH * CHANNELS;
-
 fn main() {
     demo::WaterfallDemo::new().run();
 }

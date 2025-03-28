@@ -16,16 +16,18 @@
  *   along with rust-rtl-sdr-waterfall-demo. If not, see
  *   <https://www.gnu.org/licenses/>. */
 
-use crate::FFT_SIZE;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::ops::DerefMut;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
 
+const FFT_SIZE: usize = crate::ui::WIDTH as usize;
+
 pub fn start_reader_thread(
     mut reader: rtlsdr_mt::Reader,
+    center_frequency: Arc<AtomicU32>,
     should_stop: Arc<AtomicBool>,
     sender: SyncSender<FftResult>,
 ) -> thread::JoinHandle<()> {
@@ -33,9 +35,11 @@ pub fn start_reader_thread(
         let signal_processor = SignalProcessor::new();
 
         while !should_stop.load(Ordering::Relaxed) {
+            let cf = center_frequency.load(Ordering::Relaxed);
             reader
                 .read_async(1, 2048, |buf| {
-                    let result = signal_processor.process_signal(buf);
+                    let mut result = signal_processor.process_signal(buf);
+                    result.center_frequency = cf;
                     match sender.try_send(result) {
                         Ok(..) => {}
                         Err(..) => {}
@@ -53,6 +57,7 @@ enum WindowType {
 
 pub struct FftResult {
     pub avg: f64,
+    pub center_frequency: u32,
     pub log_magnitudes: Vec<f64>,
     pub peak: Option<(usize, f64)>,
 }
@@ -106,6 +111,7 @@ impl SignalProcessor {
 
         let mut result = FftResult {
             avg: 0.0f64,
+            center_frequency: 0,
             log_magnitudes: vec![0.0f64; FFT_SIZE],
             peak: None,
         };
