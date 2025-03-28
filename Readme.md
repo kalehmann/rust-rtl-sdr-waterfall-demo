@@ -8,6 +8,17 @@ Rust using SDL2.
 * Basic interfacing with the RTL-SDR
 * Have a FFT with [normalization to dBFS][fft_normalization]
 
+### Keybindings
+
+| Key         | Function                            |
+|-------------|-------------------------------------|
+| `Up`        | Increases the tuner gain.           |
+| `Down`      | Decreases the tuner gain.           |
+| `Left`      | Decreases the frequency by 100 KHz. |
+| `Right`     | Increases the frequency by 100 KHz. |
+| `Page down` | Decreases the frequency by 2 MHz.   |
+| `Page up`   | Decreases the frequency by 2 MHz.   |
+
 ### Colors
 
 The colors are loosely inspired by [this reddit post][color_palette].
