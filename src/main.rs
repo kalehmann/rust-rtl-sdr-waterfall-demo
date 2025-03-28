@@ -22,8 +22,6 @@ mod ui;
 
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 800;
-const SPECTRUM_OFFSET: u32 = 30;
-const WATERFALL_OFFSET: u32 = 300;
 const CHANNELS: u32 = 3;
 const BUF_SIZE: usize = (WIDTH * HEIGHT * CHANNELS) as usize;
 const FFT_SIZE: usize = WIDTH as usize;

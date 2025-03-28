@@ -16,7 +16,7 @@
  *   along with rust-rtl-sdr-waterfall-demo. If not, see
  *   <https://www.gnu.org/licenses/>. */
 
-use crate::dsp::{roll, start_reader_thread};
+use crate::dsp;
 use crate::ui;
 use crate::{BUF_SIZE, CHANNELS, FFT_SIZE, HEIGHT, WIDTH};
 use sdl2::event::Event;
@@ -24,6 +24,7 @@ use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::render::BlendMode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -78,13 +79,22 @@ impl WaterfallDemo {
             ctl.disable_agc().unwrap();
             ctl.set_tuner_gain(496).unwrap();
 
-            let reader_thread = start_reader_thread(
+            let (sync_sender, receiver) = sync_channel::<dsp::FftResult>(0);
+
+            let reader_thread = dsp::start_reader_thread(
                 reader,
                 should_stop.clone(),
-                video_buffer.clone(),
+                sync_sender,
             );
 
             while !should_stop.load(Ordering::Relaxed) {
+                match receiver.recv() {
+                    Ok(result) => {
+                        ui::update_video_buffer(video_buffer.clone(), result);
+                    }
+                    Err(..) => {}
+                }
+
                 let desired_freq = center_frequency.load(Ordering::Relaxed);
                 let current_freq = ctl.center_freq();
 
@@ -95,7 +105,7 @@ impl WaterfallDemo {
                     ctl.set_center_freq(desired_freq).unwrap();
                     let vb = video_buffer.clone();
                     let mut raw_data = vb.lock().unwrap();
-                    roll(
+                    ui::roll(
                         &mut raw_data,
                         vec![HEIGHT, WIDTH, CHANNELS],
                         2,
