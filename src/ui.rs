@@ -138,23 +138,30 @@ impl Ui {
                     Event::KeyDown {
                         keycode: Some(Keycode::Left),
                         ..
-                    } => {
-                        self.center_frequency.store(
-                            self.center_frequency.load(Ordering::Relaxed)
-                                - 100_000,
-                            Ordering::Relaxed,
-                        );
-                    }
+                    } => change_frequency(
+                        self.center_frequency.clone(),
+                        -100_000,
+                    ),
                     Event::KeyDown {
                         keycode: Some(Keycode::Right),
                         ..
                     } => {
-                        self.center_frequency.store(
-                            self.center_frequency.load(Ordering::Relaxed)
-                                + 100_000,
-                            Ordering::Relaxed,
-                        );
+                        change_frequency(self.center_frequency.clone(), 100_000)
                     }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::PageDown),
+                        ..
+                    } => change_frequency(
+                        self.center_frequency.clone(),
+                        -2_000_000,
+                    ),
+                    Event::KeyDown {
+                        keycode: Some(Keycode::PageUp),
+                        ..
+                    } => change_frequency(
+                        self.center_frequency.clone(),
+                        2_000_000,
+                    ),
                     _ => {}
                 }
             }
@@ -167,13 +174,17 @@ impl Ui {
                                 - result.center_frequency as i32;
                             let mut raw_data =
                                 self.video_buffer.lock().unwrap();
-                            roll(
-                                &mut raw_data,
-                                vec![HEIGHT, WIDTH, CHANNELS],
-                                2,
-                                diff.signum() * WIDTH as i32 * diff.abs()
-                                    / self.sample_rate as i32,
-                            );
+                            if diff.abs() > self.sample_rate as i32 {
+                                raw_data.fill(0);
+                            } else {
+                                roll(
+                                    &mut raw_data,
+                                    vec![HEIGHT, WIDTH, CHANNELS],
+                                    2,
+                                    diff.signum() * WIDTH as i32 * diff.abs()
+                                        / self.sample_rate as i32,
+                                );
+                            }
                             current_frequency = result.center_frequency;
                         }
                         avg = result.avg;
@@ -346,6 +357,17 @@ impl Ui {
             }
         }
     }
+}
+
+fn change_frequency(frequency: Arc<AtomicU32>, step: i32) {
+    let mut new_frequency = frequency.load(Ordering::Relaxed);
+    if step > 0 {
+        new_frequency += step as u32;
+    } else {
+        new_frequency -= step.abs() as u32;
+    }
+
+    frequency.store(new_frequency, Ordering::Relaxed);
 }
 
 fn create_font<'a>(
