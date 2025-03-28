@@ -218,9 +218,25 @@ impl Ui {
         self.canvas.fill_rect(Rect::new(0, 30, 70, 240)).unwrap();
         let freq_mhz = current_frequency as f64 / 1_000_000.;
 
+        let msamples = self.sample_rate as f64 / 1_000_000.0;
+        let pixels_per_mhz = (WIDTH as f64 / msamples) as u32;
+        let freq_sub = freq_mhz - 1.0;
+        let freq_sup = freq_mhz + 1.0;
+        self.render_text_centered(
+            &format!("{freq_sub:.3} MHz").to_string(),
+            (WIDTH / 2 - pixels_per_mhz) as i32,
+            285,
+            &font_md,
+        );
         self.render_text_centered(
             &format!("{freq_mhz:.3} MHz").to_string(),
             (WIDTH / 2) as i32,
+            285,
+            &font_md,
+        );
+        self.render_text_centered(
+            &format!("{freq_sup:.3} MHz").to_string(),
+            (WIDTH / 2 + pixels_per_mhz) as i32,
             285,
             &font_md,
         );
