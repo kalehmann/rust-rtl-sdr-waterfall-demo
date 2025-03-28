@@ -45,6 +45,7 @@ const ANDIKA_BOLD_TTF: &[u8] =
 pub struct Ui {
     canvas: Canvas<sdl2::video::Window>,
     center_frequency: Arc<AtomicU32>,
+    color_map: Vec<[u8; 3]>,
     event_pump: sdl2::EventPump,
     fft_recv: Option<Receiver<FftResult>>,
     sample_rate: u32,
@@ -68,6 +69,10 @@ impl Ui {
         Ui {
             canvas: canvas,
             center_frequency: center_frequency,
+            color_map: interpolate_color_map(
+                vec![[255, 200, 20], [250, 110, 20], [60, 0, 45], [30, 20, 50]],
+                121,
+            ),
             event_pump: event_pump,
             fft_recv: None,
             sample_rate: sample_rate,
@@ -175,8 +180,8 @@ impl Ui {
 
         for i in 0..WIDTH as usize {
             // Map -120 to 0 dBFS to a value between 0 and 255
-            let val = (2.12 * (100.0 + fft_result.log_magnitudes[i])) as u8;
-            raw_data[index..index + 3].copy_from_slice(&[val, val, val]);
+            let l = (-1. * fft_result.log_magnitudes[i]) as usize;
+            raw_data[index..index + 3].copy_from_slice(&self.color_map[l]);
             index += 3;
 
             // Draw the amplitude spectrum.
@@ -286,6 +291,29 @@ fn create_font<'a>(
     font.set_style(FontStyle::BOLD);
 
     return font;
+}
+
+fn interpolate_color_map(
+    colors: Vec<[u8; 3]>,
+    map_size: usize,
+) -> Vec<[u8; 3]> {
+    let mut result: Vec<[u8; 3]> = vec![[0, 0, 0]; map_size];
+    // Steps between two colors
+    let s = map_size as f64 / (colors.len() - 1) as f64;
+
+    for i in 0..map_size {
+        let start = colors[(i as f64 / s).floor() as usize];
+        let end = colors[(i as f64 / s).ceil() as usize];
+	// Offset from the start to the end color from 0 to 1
+        let o = (i as f64 % s) / s;
+        result[i] = [
+            (start[0] as f64 + (end[0] as f64 - start[0] as f64) * o) as u8,
+            (start[1] as f64 + (end[1] as f64 - start[1] as f64) * o) as u8,
+            (start[2] as f64 + (end[2] as f64 - start[2] as f64) * o) as u8,
+        ];
+    }
+
+    return result;
 }
 
 /// Rolls the buffer at d fields over the specified axis and fills the remaining
