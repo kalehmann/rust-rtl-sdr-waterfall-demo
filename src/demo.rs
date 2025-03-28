@@ -27,19 +27,21 @@ use std::time::Duration;
 pub struct WaterfallDemo {
     center_frequency: Arc<AtomicU32>,
     control_thread: Option<thread::JoinHandle<()>>,
+    fft_window: dsp::WindowType,
     sample_rate: Arc<AtomicU32>,
     should_stop: Arc<AtomicBool>,
     ui: ui::Ui,
 }
 
 impl WaterfallDemo {
-    pub fn new() -> WaterfallDemo {
+    pub fn new(fft_window: dsp::WindowType) -> WaterfallDemo {
         let center_frequency = Arc::new(AtomicU32::new(100_000_000));
         let sample_rate: u32 = 2_400_000;
 
         WaterfallDemo {
             center_frequency: center_frequency.clone(),
             control_thread: None,
+            fft_window: fft_window,
             sample_rate: Arc::new(AtomicU32::new(sample_rate)),
             should_stop: Arc::new(AtomicBool::new(false)),
             ui: ui::Ui::new(center_frequency.clone(), sample_rate),
@@ -63,6 +65,7 @@ impl WaterfallDemo {
 
     fn start_control_thread(&mut self) {
         let center_frequency = self.center_frequency.clone();
+        let fft_window = self.fft_window;
         let sample_rate = self.sample_rate.clone();
         let should_stop = self.should_stop.clone();
         let (sync_sender, receiver) = sync_channel::<dsp::FftResult>(0);
@@ -81,6 +84,7 @@ impl WaterfallDemo {
             let reader_thread = dsp::start_reader_thread(
                 reader,
                 center_frequency.clone(),
+                fft_window,
                 should_stop.clone(),
                 sync_sender,
             );

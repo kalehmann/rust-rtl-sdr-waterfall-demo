@@ -16,10 +16,21 @@
  *   along with rust-rtl-sdr-waterfall-demo. If not, see
  *   <https://www.gnu.org/licenses/>. */
 
+use clap::Parser;
+
 mod demo;
 mod dsp;
 mod ui;
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct CliArgs {
+    #[arg(short, long, value_enum, default_value_t=dsp::WindowType::Rectangular)]
+    fft_window: dsp::WindowType,
+}
+
 fn main() {
-    demo::WaterfallDemo::new().run();
+    let args = CliArgs::parse();
+
+    demo::WaterfallDemo::new(args.fft_window).run();
 }

@@ -28,11 +28,12 @@ const FFT_SIZE: usize = crate::ui::WIDTH as usize;
 pub fn start_reader_thread(
     mut reader: rtlsdr_mt::Reader,
     center_frequency: Arc<AtomicU32>,
+    fft_window: WindowType,
     should_stop: Arc<AtomicBool>,
     sender: SyncSender<FftResult>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let signal_processor = SignalProcessor::new();
+        let signal_processor = SignalProcessor::new(fft_window);
 
         while !should_stop.load(Ordering::Relaxed) {
             let cf = center_frequency.load(Ordering::Relaxed);
@@ -50,7 +51,8 @@ pub fn start_reader_thread(
     })
 }
 
-enum WindowType {
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum WindowType {
     Bartlett,
     Rectangular,
 }
@@ -68,13 +70,13 @@ struct SignalProcessor {
 }
 
 impl SignalProcessor {
-    pub fn new() -> SignalProcessor {
+    pub fn new(window: WindowType) -> SignalProcessor {
         let mut planner: FftPlanner<f64> = FftPlanner::new();
         let fft = planner.plan_fft_forward(FFT_SIZE);
 
         SignalProcessor {
             fft: fft,
-            window: WindowType::Rectangular,
+            window: window,
         }
     }
 
