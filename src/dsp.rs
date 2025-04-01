@@ -122,6 +122,7 @@ impl SignalProcessor {
 
         for (i, c) in signal.into_iter().enumerate() {
             let index = (i + FFT_SIZE / 2) % FFT_SIZE;
+	    // Clip the magnitude between 0 and 120 dBFS
             let logmag = 10.0
                 * (c.norm_sqr() / (FFT_SIZE as f64).powi(2))
                     .max(1e-12)
